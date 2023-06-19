@@ -32,7 +32,7 @@ class QuestionReferenceModel:
                                     truncation=True, return_tensors='pt')
             for key in question_inputs:
                 question_inputs[key] = question_inputs[key].to(self.device)
-            print(question_inputs["input_ids"].shape)
+            print(f'tensor size of question:{question_inputs["input_ids"].shape}')
             
             question_embedding = self.model.question_encoder(**question_inputs) / 0.05
         return question_embedding.cpu().numpy()

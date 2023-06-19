@@ -26,14 +26,28 @@ class QueryBody(BaseModel):
     msg: str = "ok"
     debug: Optional[Any] = {}
     method: str = ""
-    references: List = []
+    # references: List = []
+    results: Dict = {
+        # 改成名称
+        "contriever": [],
+    }
+    success: bool
+
+# KB = {
+#     "beijing": {
+#         "data": [
+#             "data/beijing/knowledge.jsonl"
+#         ],
+#         "index": "test_beijing",
+#     }
+# }
 
 KB = {
-    "beijing": {
+    "sysu": {
         "data": [
-            "data/beijing/knowledge.jsonl"
+            "data/sys_test/sysu_data.jsonl"
         ],
-        "index": "test_beijing",
+        "index": "sysu",
     }
 }
 
@@ -44,7 +58,8 @@ def load_data(index):
         with open(filepath, "r") as f:
             for line in f.readlines():
                 data = json.loads(line)
-                sentences.append(data["title"])
+                sentences.append(str(data["title"]).split('-')[-1])
+                # sentences.append(data["title"])
                 contents.append(data)
     return sentences, contents
 
@@ -109,6 +124,7 @@ def contriever_retrieve(item: QueryModel) -> QueryBody:
     time_used = time.time() - time0
     print("index search time: %f sec." % time_used)
 
+    qBody = QueryBody(method = "contriever", success = True)
     references = []
     for qid, result_score in enumerate(top_results_and_scores):
         doc_ids, scores = result_score
@@ -122,7 +138,19 @@ def contriever_retrieve(item: QueryModel) -> QueryBody:
             print(sentinel["data"][item.index][doc_id]["title"], )
             print(sentinel["data"][item.index][doc_id]["content"])
             print()
-    return QueryBody(method="contriever", references=references)
+
+            reference = {  # 第一个资料片段
+                "_id": doc_id,  # 这个资料的编号，便于后续复盘
+                "title": sentinel["data"][item.index][doc_id]["title"],  # 也相当于QA中的Q
+                "content": sentinel["data"][item.index][doc_id]["content"],  # 也相当于QA中的A
+                "article_name": sentinel["data"][item.index][doc_id]["title"],  # 资料来源的文章名称（多个资料片段可以来源于同一个文章），可用于参考文献的展示，也可以留空
+                "url": "",  # 该文章来源的url，可以留空
+                "similarity": score  # query和这个资料片段的相似度
+            }
+            qBody.results["contriever"].append(reference)
+
+    # return QueryBody(method="contriever", references=references)
+    return qBody
 
 
 def es_retrieve(item: QueryModel) -> QueryBody:
@@ -158,5 +186,5 @@ def es_retrieve(item: QueryModel) -> QueryBody:
 
 if __name__ == "__main__":
     uvicorn.run(
-        app="retrieval_api:app", host="0.0.0.0", port=9596, reload=True
+        app="retrieve_api:app", host="0.0.0.0", port=9596, reload=True
     )
