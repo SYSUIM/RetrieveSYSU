@@ -7,9 +7,16 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import Dict, Optional, List, Any, Union
 import glob
+import logging
 
 from contriever.faiss_contriever import QuestionReferenceModel
 from contriever.indexer.faiss_indexers import DenseFlatIndexer
+
+logging.basicConfig(level=logging.DEBUG,
+                    # 设置日志格式，包括时间、日志级别、消息
+                    format='%(asctime)s - %(levelname)s - %(message)s',
+                    # 设置时间格式
+                    datefmt='%Y-%m-%d %H:%M:%S')
 
 app = FastAPI()
 sentinel = {}
@@ -124,6 +131,7 @@ def contriever_retrieve(item: QueryModel) -> QueryBody:
     top_docs = item.top_n
     top_results_and_scores = sentinel["index"][item.index].search_knn(question_embedding, top_docs)
     time_used = time.time() - time0
+    logging.info(f'index search: {item.query}')
     print("index search time: %f sec." % time_used)
 
     # qBody = QueryBody(method = "contriever", success = True)
