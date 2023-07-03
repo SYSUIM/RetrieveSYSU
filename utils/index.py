@@ -18,7 +18,7 @@ def build_index(jsonl_file_path, index_file_path) -> dict:
     with open(jsonl_file_path, "r") as f:
         for line in f:
             data = json.loads(line)
-            title = data["title"]
+            title = data["content"]
             words = jieba_cut(title)
             for word in words:
                 index[word].append(data['id'])
@@ -58,8 +58,9 @@ def search(query, jsonl_file_path, index_file_path, data_for_query_path) -> list
     sorted_match_data = sorted(match_data, key=lambda x: x['match'], reverse=True)
     
     df = pd.DataFrame(sorted_match_data)
-    df.to_json(data_for_query_path, orient="records", lines=True, force_ascii=False)
-    return sorted_match_data
+    res = df[df['match'] > 0.3]
+    res.to_json(data_for_query_path, orient="records", lines=True, force_ascii=False)
+    return res
 
 
 if __name__ == "__main__":
@@ -70,5 +71,5 @@ if __name__ == "__main__":
 
     data_for_query_path = "/data2/fkj2023/projects/RetrieveSYSU/data/sys_test/data_for_query.jsonl"
     match_data = search('中山大学信息管理学院2022年录取分数线',jsonl_file_path, index_file_path, data_for_query_path)
-    for i in match_data:
+    for _, i in match_data.iterrows():
         print(i['title'],i['match'])
