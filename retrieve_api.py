@@ -30,7 +30,9 @@ jsonl_file_path = "./data/sys_test/sysu_data_withid.jsonl"
 index_file_path = './data/sys_test/id_index_content.pickle'
 university_name = '中山大学'
 match_dox_ids = []
-
+if not os.path.exists(index_file_path):
+    os.mkdir(index_file_path )
+  
 def jieba_cut(sentence):
     words = set(jieba.cut(sentence))
     words = [word for word in words if len(word) > 1]
@@ -109,7 +111,7 @@ def search(query) -> list:
     rate = [sum_num/i for i in cnt_dox_num]
     sum_rate = sum(rate)
     
-    norm_rate = [i/sum_rate for i in rate] #每个查询词对应的正则化后的权重分数
+    norm_rate = [i/sum_rate for i in rate] 
     print(f'norm_rate:{norm_rate}')
     match_list = Counter(res_list).most_common()
     match_res = []
@@ -205,7 +207,7 @@ async def startup_event():
         os.mkdir("index")
     vector_size = 768
     buffer_size = 50000
-    model = QuestionReferenceModel('contriever/ckpt/question_encoder', 'contriever/ckpt/reference_encoder')
+    model = QuestionReferenceModel('contriever/ckpt/question_encoder', 'contriever/ckpt/question_encoder')
 
     sentinel["model"] = model
     sentinel["index"] = {}
@@ -260,6 +262,8 @@ async def retrieve(item: QueryModel) -> QueryBody:
 
 
 def contriever_retrieve(item: QueryModel) -> QueryBody:
+
+    # item.query = str(item.query.split('\n')[1])
     
     current_year = datetime.datetime.now().year
     item.query = item.query.replace('今年',f'{current_year}年')
