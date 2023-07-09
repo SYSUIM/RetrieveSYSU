@@ -52,7 +52,7 @@ class QueryBody(BaseModel):
 KB = {
     "sysu": {
         "data": [
-            "data/sys_test/sysu_data.jsonl"
+            "data/sys_test/sysu_data_withid.jsonl"
         ],
         "index": "sysu",
     }
