@@ -30,8 +30,6 @@ jsonl_file_path = "./data/sys_test/sysu_data_withid.jsonl"
 index_file_path = './data/sys_test/id_index_content.pickle'
 university_name = '中山大学'
 match_dox_ids = []
-if not os.path.exists(index_file_path):
-    os.mkdir(index_file_path )
   
 def jieba_cut(sentence):
     words = set(jieba.cut(sentence))
