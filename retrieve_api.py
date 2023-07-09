@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.DEBUG,
                     datefmt='%Y-%m-%d %H:%M:%S')
 
 local_index = {}
-jsonl_file_path = "./data/sys_test/sys_data.jsonl"
+jsonl_file_path = "./data/sys_test/sys_data_withid.jsonl"
 index_file_path = './data/sys_test/id_index_content.pickle'
 university_name = '中山大学'
 match_dox_ids = []
