@@ -375,5 +375,5 @@ def es_retrieve(item: QueryModel) -> QueryBody:
 if __name__ == "__main__":
     build_index(jsonl_file_path, index_file_path)
     uvicorn.run(
-        app="retrieve_api:app", host="127.0.0.1", port=3308, reload=True
+        app="retrieve_api:app", host="127.0.0.1", port=9628, reload=True
     )
