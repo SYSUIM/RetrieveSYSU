@@ -1,7 +1,7 @@
 import sys
 import requests
 
-url = "http://0.0.0.0:9628/retrieve"  # 替换为实际的主机和端口
+url = "http://127.0.0.1:9628/retrieve"  # 替换为实际的主机和端口
 
 
 # 可以不改
