@@ -90,7 +90,7 @@ class DenseFlatIndexer(DenseIndexer):
         super(DenseFlatIndexer, self).__init__(buffer_size=buffer_size)
 
     def init_index(self, vector_sz: int):
-        self.index = faiss.IndexFlatIP(vector_sz)
+        self.index = faiss.IndexFlatIP(vector_sz) #使用向量内积计算向量相似度
 
     def index_data(self, data: List[Tuple[object, np.array]]):
         n = len(data)
@@ -108,8 +108,14 @@ class DenseFlatIndexer(DenseIndexer):
 
     def search_knn(self, query_vectors: np.array, top_docs: int) -> List[Tuple[List[object], List[float]]]:
         scores, indexes = self.index.search(query_vectors, top_docs)
+        print(f'type(scores):{type(scores)}')
+        magnitude = np.linalg.norm(query_vectors)
+        scores /= magnitude
+        # print(f'len(scores):{len(scores)}')
+        # print(f'len(scores)[0]:{len(scores[0])}')
         # convert to external ids
         db_ids = [[self.index_id_to_db_id[i] for i in query_top_idxs] for query_top_idxs in indexes]
+        # print(f'len(db_ids):{len(db_ids)}')
         result = [(db_ids[i], scores[i]) for i in range(len(db_ids))]
         return result
 
