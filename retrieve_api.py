@@ -27,12 +27,14 @@ logging.basicConfig(level=logging.DEBUG,
 
 local_index = {}
 jsonl_file_path = "./data/sys_test/sysu_data_withid.jsonl"
-index_file_path = './data/sys_test/id_index_content.pickle'
+index_file_path = 'data/sys_test/id_index_content.pickle'
 university_name = '中山大学'
 match_dox_ids = []
-if not os.path.exists(index_file_path):
-    os.mkdir(index_file_path )
+# if not os.path.exists(index_file_path):
+#     os.mkdir(index_file_path )
   
+
+
 def jieba_cut(sentence):
     words = set(jieba.cut(sentence))
     words = [word for word in words if len(word) > 1]
@@ -61,7 +63,8 @@ def build_index(jsonl_file_path, index_file_path) -> dict:
 
     return index
 
-
+build_index(jsonl_file_path, index_file_path)
+print(f'build_index done')
 local_index =load_local_index(index_file_path)
 
 # 定义查询函数
@@ -202,7 +205,7 @@ def load_data(index):
 @app.on_event("startup")
 async def startup_event():
     # local_index =load_local_index(index_file_path)
-    print(f'load loacl index done')
+    # print(f'load loacl index done')
     if not os.path.exists("index"):
         os.mkdir("index")
     vector_size = 768
