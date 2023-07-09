@@ -61,7 +61,8 @@ def build_index(jsonl_file_path, index_file_path) -> dict:
 
     return index
 
-
+build_index(jsonl_file_path, index_file_path)
+print(f'load loacl index done')
 local_index =load_local_index(index_file_path)
 
 # 定义查询函数
@@ -202,7 +203,7 @@ def load_data(index):
 @app.on_event("startup")
 async def startup_event():
     # local_index =load_local_index(index_file_path)
-    print(f'load loacl index done')
+
     if not os.path.exists("index"):
         os.mkdir("index")
     vector_size = 768
@@ -373,7 +374,7 @@ def es_retrieve(item: QueryModel) -> QueryBody:
 
 
 if __name__ == "__main__":
-    build_index(jsonl_file_path, index_file_path)
+
     uvicorn.run(
         app="retrieve_api:app", host="127.0.0.1", port=9628, reload=True
     )
