@@ -19,7 +19,8 @@ import jieba.posseg as pseg
 from collections import Counter
 from contriever.faiss_contriever import QuestionReferenceModel
 from contriever.indexer.faiss_indexers import DenseFlatIndexer
-logging.basicConfig(level=logging.DEBUG,
+from elasticsearch import Elasticsearch
+logging.basicConfig(level=logging.INFO,
                     # 设置日志格式，包括时间、日志级别、消息
                     format='%(asctime)s - %(levelname)s - %(message)s',
                     # 设置时间格式
@@ -30,7 +31,7 @@ jsonl_file_path = "./data/sys_test/sysu_data_withid.jsonl"
 index_file_path = 'data/sys_test/id_index_content.pickle'
 university_name = '中山大学'
 match_dox_ids = []
-  
+es = Elasticsearch(['localhost:9200'])  
 
 
 def jieba_cut(sentence):
@@ -61,9 +62,9 @@ def build_index(jsonl_file_path, index_file_path) -> dict:
 
     return index
 
-build_index(jsonl_file_path, index_file_path)
-print(f'build_index done')
-local_index =load_local_index(index_file_path)
+# build_index(jsonl_file_path, index_file_path)
+# print(f'build_index done')
+# local_index =load_local_index(index_file_path)
 
 # 定义查询函数
 def search(query) -> list:
@@ -151,29 +152,14 @@ sentinel = {}
 class QueryModel(BaseModel):
     query: str = ""
     top_n: int = 2000
-    method: str = "contriever"
+    method: str = "es"
     index: str = "sysu"
 
 class QueryBody(BaseModel):
-    # code: int = 0
-    # msg: str = "ok"
-    # debug: Optional[Any] = {}
-    # method: str = ""
-    # references: List = []
-    results: Dict = {
-        # 改成名称
-        "contriever": [],
-    }
-    success: bool
+    method: str = ""
+    references: List[Dict[str, Union[float, Dict[str, str]]]] = []
+    success: bool = True
 
-# KB = {
-#     "beijing": {
-#         "data": [
-#             "data/beijing/knowledge.jsonl"
-#         ],
-#         "index": "test_beijing",
-#     }
-# }
 
 KB = {
     "sysu": {
@@ -184,68 +170,36 @@ KB = {
     }
 }
 
-def load_data(index):
-    sentences, contents, all_search_data = [], [],{}
-    for filepath in KB[index]["data"]:
-        print(filepath)
-        with open(filepath, "r") as f:
-            for line in f.readlines():
-                
-                data = json.loads(line)
-                dox_id = data['id']
-                # if dox_id in match_dox_ids:
-                # sentences.append(str(data["title"]).split('-')[-1])
-                sentences.append(data["title"])
-                contents.append(data)
-                all_search_data[str(dox_id)] = data
-    return sentences, contents, all_search_data
+
+def es_data():
+    time1 = time.time()
+    data_file = KB["sysu"]["data"][0]
+
+    lines = open(data_file, 'r', encoding='utf-8').readlines()
+    data = [eval(line) for line in lines]
+
+    bulk_data = []
+    for doc in data:
+        index_meta = {
+            'index': {
+                '_index': KB["sysu"]["index"],
+                '_type': 'doc',
+                '_id': doc['id']
+            }
+        }
+        bulk_data.append(index_meta)
+        bulk_data.append(doc)
+
+    res = es.bulk(index=KB["sysu"]["index"], body=bulk_data, refresh=True)
+    cost_time = time.time()-time1
+    print(f'import es data done...')
+    print(f'import es data cost time: {cost_time} sec.')
+
 
 @app.on_event("startup")
 async def startup_event():
-    # local_index =load_local_index(index_file_path)
-    # print(f'load loacl index done')
-    if not os.path.exists("index"):
-        os.mkdir("index")
-    vector_size = 768
-    buffer_size = 50000
-    model = QuestionReferenceModel('contriever/ckpt/question_encoder', 'contriever/ckpt/question_encoder')
-
-    sentinel["model"] = model
-    sentinel["index"] = {}
-    sentinel["data"] = {}
-    sentinel["id"] = {}
-
-    for index_name in KB.keys():
-        print("Preparing index", index_name)
-        index = DenseFlatIndexer()
-        print("Local Index class %s " % type(index))
-        index.init_index(vector_size)
-
-        sentences, contents, all_search_data = load_data(index_name)
-
-        index_path = f"index/{index_name}"
-        if index.index_exists(index_path):
-            index.deserialize(index_path)
-        else:
-            document_embeddings = model.get_document_embedding(sentences)
-
-            buffer = []
-            for i, embedding in enumerate(document_embeddings):
-                item = (i, embedding)
-                buffer.append(item)
-                if 0 < buffer_size == len(buffer):
-                    index.index_data(buffer)
-                    buffer = []
-            index.index_data(buffer)
-            print("Data indexing completed.")
-            
-            if not os.path.exists(index_path):
-                os.mkdir(index_path)
-            index.serialize(index_path)
-
-        sentinel["index"][index_name] = index
-        sentinel["data"][index_name] = contents
-        # sentinel["all_data"][index_name] = all_search_data
+    es_data()
+    print('app start')
     
 
         
@@ -253,115 +207,43 @@ async def startup_event():
 async def retrieve(item: QueryModel) -> QueryBody:
     # return contriever_retrieve(item)
     if item.method == "contriever":
-        return contriever_retrieve(item)
+        # return contriever_retrieve(item)
+        return 
     elif item.method == "es":
         return es_retrieve(item)
     else:
-        # return QueryBody(msg=f"Method {item.method} is not supported.")
         return QueryBody(success = False)
 
 
 
-def contriever_retrieve(item: QueryModel) -> QueryBody:
-
-    # item.query = str(item.query.split('\n')[1])
-    
-    current_year = datetime.datetime.now().year
-    item.query = item.query.replace('今年',f'{current_year}年')
-    item.query = item.query.replace('去年',f'{current_year-1}年')
-    item.query = item.query.replace('前年',f'{current_year-2}年')
-    # if '20' not in item.query:
-    #     item.query = str(current_year)+'年'+item.query
-    rewritten_query = item.query
-    if university_name in rewritten_query:
-        rewritten_query = rewritten_query.replace(university_name,'')
-    time1 = time.time()
-    matched_res = search(rewritten_query)
-    match_time_used = time.time() - time1
-    print(f'original query:{item.query}')
-    logging.info(f'index search: {rewritten_query}')
-    print("substring match search time: %f sec." % match_time_used)
-
-    if len(matched_res)>1000:
-        matched_res = matched_res[:1000]
-    print(f'matched_res[:10]:{matched_res[:10]}\n')
-    match_dox_ids = [i[0] for i in matched_res]
-
-    question_embedding = sentinel["model"].get_question_embedding(rewritten_query)
-    time0 = time.time()
-    top_docs = item.top_n
-    top_results_and_scores = sentinel["index"][item.index].search_knn(question_embedding, top_docs)
-    time_used = time.time() - time0
-    print("index search time: %f sec." % time_used)
-    # print(top_results_and_scores )
-    # qBody = QueryBody(method = "contriever", success = True)
-    qBody = QueryBody(success = True)
-    references = []
-
-    emb_res = [(x, y) for a, b in top_results_and_scores for x, y in zip(a, b)]
-    print(f'emb_res[:10]:{emb_res[:10]}\n')
-
-    weighted_res = weighted_average(emb_res, matched_res)
-    # weighted_res = weighted_res[2:]
-    print(f'weighted_res[:20]:{weighted_res[:20]}')
-
-    lst = [i[1] for i in weighted_res]
-
-    best_id = find_max_second_order_diff(lst)
-    print(f'best_id:{best_id}\n')
-
-    weighted_res = weighted_res[:best_id]
-
-    weighted_res = [i for i in weighted_res if i[1]>0.5]
-
-    print(f'weighted_res result:{ weighted_res}')
-    # print(f'sentinel["data"][item.index]:{len(sentinel["data"][item.index])}')
-
-    for qid, result_score in enumerate(weighted_res):
-        doc_id, score = result_score
-        references.append({
-            "score": float(score),
-            "source": sentinel["data"][item.index][doc_id]
-        })
-        # print(f"Contriever score %.3f" % float(score))
-        # print('title:',sentinel["data"][item.index][doc_id]["title"])
-        # print('content:',sentinel["data"][item.index][doc_id]["content"])
-        # print()
-
-        reference = {  # 第一个资料片段
-            "_id": doc_id,  # 这个资料的编号，便于后续复盘
-            "title": sentinel["data"][item.index][doc_id]["title"],  # 也相当于QA中的Q
-            "content": sentinel["data"][item.index][doc_id]["content"],  # 也相当于QA中的A
-            "article_name": sentinel["data"][item.index][doc_id]["title"],  # 资料来源的文章名称（多个资料片段可以来源于同一个文章），可用于参考文献的展示，也可以留空
-            "url": sentinel["data"][item.index][doc_id]["url"],  # 该文章来源的url，可以留空
-            "similarity": float(score)  # query和这个资料片段的相似度
-        }
-        qBody.results["contriever"].append(reference)
-
-    # return QueryBody(method="contriever", references=references)
-    return qBody
-
-
 def es_retrieve(item: QueryModel) -> QueryBody:
+
+    print(f'query:{item.query}')
+
     data = {
         "query": {
-            "bool": {
-                "must": [
-                    {"match": { "title": item.query }},
-                    {"match": { "content": item.query }}
-                ]
+            "multi_match": {
+                "query": item.query,
+                "fields": ["title", "content"]
             }
         }
     }
-    json_data = json.dumps(data, ensure_ascii=False, indent=4)
-    proc = subprocess.check_output(['bash', "es/search.sh", KB[item.index]["index"], json_data])
-    result = json.loads(proc)
-    
-    if result["hits"]["total"] == 0:
-        return QueryBody(method="es", references=[])
-    else:
-        references = []
-        for d in result["hits"]["hits"][:item.top_n]:
+
+    result = es.search(index=KB["sysu"]["index"], body=data)
+    references = []
+    res = result["hits"]["hits"]
+
+    if result["hits"]["total"] != 0: 
+
+        lst = [i["_score"] for i in res]
+        print(f'lst:{lst}')
+
+        if len(lst)>1:    
+            best_id = find_max_second_order_diff(lst)
+            print(f'best_id:{best_id}\n')
+            res = res[:best_id]
+
+        for d in res:
             references.append({
                 "score": d["_score"],
                 "source": d["_source"]
@@ -370,7 +252,7 @@ def es_retrieve(item: QueryModel) -> QueryBody:
             print(d["_source"]["title"], d["_score"])
             print(d["_source"]["content"])
             print()
-        return QueryBody(method="es", references=references)
+    return QueryBody(method="es", references=references)
 
 
 if __name__ == "__main__":
@@ -378,3 +260,5 @@ if __name__ == "__main__":
     uvicorn.run(
         app="retrieve_api:app", host="127.0.0.1", port=9628, reload=True
     )
+
+# nohup python retrieve_api.py >>retrieve_api.log &
