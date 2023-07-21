@@ -1,7 +1,7 @@
 import sys
 import requests
 
-url = "http://127.0.0.1:9628/retrieve"  # 替换为实际的主机和端口
+url = "http://127.0.0.1:9633/retrieve"  # 替换为实际的主机和端口
 
 
 # 可以不改
@@ -29,19 +29,28 @@ payload_faiss = {
 
 response = requests.post(url, headers = header, json=payload_faiss)
 response = response.json()
-t = response['references']
-print(f'reference number: {len(t)}')
-for i in t:
-    print(i["score"])
-    print(i["source"])
-    print('\n')
-# print(f'response:{response}')
-# print(f'res:{t}')
-# for i, reference in enumerate(t['contriever']):
-#     print('第{}条参考数据:'.format(i+1))
-#     print('dox_id:',reference['_id'])
-#     print('title:',reference['title'])
-#     print('content:',reference['content'])
-#     print('url:',reference['url'])
-#     print('similarity:',reference['similarity'])
+
+
+# es 
+# t = response['references']
+# print(f'reference number: {len(t)}')
+# for i in t:
+#     print(i["score"])
+#     print(i["source"])
 #     print('\n')
+
+
+# contriever
+t = response['results']
+print(f'reference number: {len(t)}')
+for i, reference in enumerate(t['contriever']):
+    print('第{}条参考数据:'.format(i+1))
+    print('dox_id:',reference['_id'])
+    print('title:',reference['title'])
+    print('content:',reference['content'])
+    print('url:',reference['url'])
+    print('similarity:',reference['similarity'])
+    print('\n')
+
+
+# python test_retrieve.py
