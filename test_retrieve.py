@@ -1,7 +1,7 @@
 import sys
 import requests
 
-url = "http://127.0.0.1:9628/retrieve"  # 替换为实际的主机和端口
+url = "http://127.0.0.1:9633/retrieve"  # 替换为实际的主机和端口
 
 
 # 可以不改
@@ -18,6 +18,7 @@ payload_faiss = {
     # "query": sys.argv[1],
     "query": "简单介绍一下中山大学信息管理学院"
     # "query": "生物类在广东招生科目要求\n在广东地区，2023 年普通录取类中，生物类专业的招生科目要求是什么？"
+    # "query":"今年北京招生的专业"
     # "top_n": 5,
     # "method": "contriever",
     # "index": "sysu",
@@ -28,9 +29,20 @@ payload_faiss = {
 
 response = requests.post(url, headers = header, json=payload_faiss)
 response = response.json()
+
+
+# es 
+# t = response['references']
+# print(f'reference number: {len(t)}')
+# for i in t:
+#     print(i["score"])
+#     print(i["source"])
+#     print('\n')
+
+
+# contriever
 t = response['results']
-# print(f'response:{response}')
-# print(f'res:{t}')
+print(f'reference number: {len(t)}')
 for i, reference in enumerate(t['contriever']):
     print('第{}条参考数据:'.format(i+1))
     print('dox_id:',reference['_id'])
@@ -39,3 +51,6 @@ for i, reference in enumerate(t['contriever']):
     print('url:',reference['url'])
     print('similarity:',reference['similarity'])
     print('\n')
+
+
+# python test_retrieve.py

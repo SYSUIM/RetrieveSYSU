@@ -11,26 +11,117 @@ import logging
 import datetime
 import json
 import pickle
-import os
 import numpy as np
 from collections import defaultdict
 import jieba
 import jieba.posseg as pseg
 from collections import Counter
+# from retriever.faiss_retriever import QuestionReferenceModel
+# from retriever.indexer.faiss_indexers import DenseFlatIndexer
 from contriever.faiss_contriever import QuestionReferenceModel
 from contriever.indexer.faiss_indexers import DenseFlatIndexer
-logging.basicConfig(level=logging.DEBUG,
-                    # 设置日志格式，包括时间、日志级别、消息
-                    format='%(asctime)s - %(levelname)s - %(message)s',
-                    # 设置时间格式
-                    datefmt='%Y-%m-%d %H:%M:%S')
+from elasticsearch import Elasticsearch
+import torch
+from transformers import BertTokenizer, BertModel
+from torch.utils.data import Dataset, DataLoader
+import pickle
+import logging
+import os
+import math
+import numpy as np
+from elasticsearch import helpers
+# from elasticsearch_loader import Loader
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)-8s %(module)s[line:%(lineno)d]: >> %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
+
+class MyDataset(Dataset):
+    def __init__(self,ids,length):
+        self.ids = ids.to('cuda')
+        self.length = length
+       
+    def __len__(self):
+        return self.length
+    
+    def __getitem__(self, idx):
+        return {'input_ids': self.ids['input_ids'][idx],
+                'attention_mask': self.ids['attention_mask'][idx]}
+
+def generate_ids(data_list):
+    path = '/data/pzy2022/pretrained_model/bert-base-chinese'
+    tokenizer = BertTokenizer.from_pretrained(path)
+    ids = tokenizer(
+        [data for data in data_list],
+        return_tensors="pt",
+        truncation=True,
+        max_length=30, 
+        padding = 'max_length', 
+        add_special_tokens=False
+    )
+    length = len(data_list)
+    return ids, length
+
+
+def get_bert_embedding(sentences):
+
+    path = '/data/pzy2022/pretrained_model/bert-base-chinese'
+    model = BertModel.from_pretrained(
+        path,
+        torch_dtype = "auto"
+        ).to('cuda')
+
+
+    device_count = torch.cuda.device_count()
+    if device_count > 1:
+        model = torch.nn.DataParallel(model)
+
+    ids,length =  generate_ids(sentences)
+
+    batch_size = 1024
+    dataset = MyDataset(ids,length)
+    test_dataloader = DataLoader(
+        dataset = dataset,
+        batch_size = batch_size,
+        shuffle = False
+        )
+
+    logging.info(f'get embedding begin...')
+    all_vec = []
+    with torch.no_grad():
+        for batch_id, data in enumerate(test_dataloader):
+            input_keys = ('input_ids', 'attention_mask')
+            input = {key: value for key, value in data.items() if key in input_keys}
+            outputs = model(**input)
+            last_layer_embeddings = outputs.last_hidden_state  # 获取最后一层的输出
+            mask = input['attention_mask'].unsqueeze(-1).float()
+            # 对每个样本的每个token的embedding乘上attention mask，即只保留非填充部分的信息
+            last_layer_embeddings_masked = last_layer_embeddings * mask
+            # 对每个样本的每个token的embedding在token序列长度维度上求平均
+            mean_embeddings = torch.mean(last_layer_embeddings_masked, dim=1)
+            # mean_embeddings = torch.mean(last_layer_embeddings_masked[:,10:,:], dim=1)
+            vec = mean_embeddings.cpu().numpy().tolist()
+            # vec = vec[:10]
+            all_vec = all_vec + vec
+            logging.info(f'batch_id:{batch_id}/{int(len(sentences)/batch_size)}')
+    logging.info(f'get embedding done...')
+
+    return all_vec
+
+
 
 local_index = {}
 jsonl_file_path = "./data/sys_test/sysu_data_withid.jsonl"
 index_file_path = 'data/sys_test/id_index_content.pickle'
 university_name = '中山大学'
-match_dox_ids = []
-  
+match_doc_ids = []
+es = Elasticsearch(['localhost:9200'], timeout=120)
 
 
 def jieba_cut(sentence):
@@ -50,7 +141,8 @@ def build_index(jsonl_file_path, index_file_path) -> dict:
 
     with open(jsonl_file_path, "r") as f:
         for line in f:
-            data = json.loads(line)
+            # data = json.loads(line)
+            data = eval(line)
             title = data['title'] + data["content"]
             words = jieba_cut(title)
             for word in words:
@@ -88,8 +180,8 @@ def search(query) -> list:
     #                 words.append(word)
     #                 break            
 
-    if university_name in words:
-        words.remove(university_name)
+    # if university_name in words:
+    #     words.remove(university_name)
     print(words)   
 
     res_list = []
@@ -140,49 +232,110 @@ def find_max_second_order_diff(lst):
     first_order_diff = [lst[i-1] - lst[i] for i in range(1, len(lst))]
     second_order_diff = [first_order_diff[i-1] - first_order_diff[i] for i in range(1, len(first_order_diff))]
     max_diff_idx = second_order_diff.index(max(second_order_diff)) + 1
-
     return max_diff_idx
+
 
 
 app = FastAPI()
 sentinel = {}
 
-
 class QueryModel(BaseModel):
     query: str = ""
-    top_n: int = 2000
+    top_n: int = 500
+    # method: str = "es"
     method: str = "contriever"
     index: str = "sysu"
 
+
+class ResultModel(BaseModel):
+    score: float
+    source: Dict[str, Any]
+    vector: List[float]
+
+
 class QueryBody(BaseModel):
-    # code: int = 0
-    # msg: str = "ok"
-    # debug: Optional[Any] = {}
-    # method: str = ""
-    # references: List = []
+    method: str = ""
+    references: List[Dict[str, Union[float, Dict[str, Any]]]] = []
     results: Dict = {
         # 改成名称
         "contriever": [],
     }
-    success: bool
+    success: bool = True
 
-# KB = {
-#     "beijing": {
-#         "data": [
-#             "data/beijing/knowledge.jsonl"
-#         ],
-#         "index": "test_beijing",
-#     }
-# }
 
 KB = {
     "sysu": {
         "data": [
             "data/sys_test/sysu_data_withid.jsonl"
         ],
-        "index": "sysu",
+        "index": "sysu_test5",
     }
 }
+
+# 定义索引个数，主要是为了指定"vector"为dense_vector
+def create_es_index():
+    mapping = {
+        "properties": {
+            "title": {"type": "text"},
+            "url":{"type":"text"},
+            "id":{"type":"long"},
+            "content": {"type": "text"},
+            "vector": {"type": "dense_vector", "dims": 768}
+        }
+    }
+    es.indices.create(index=KB["sysu"]["index"], body={"mappings": mapping})
+
+
+
+# 将json数据导入数据库
+def index_data():
+    data_file = KB["sysu"]["data"][0]
+    lines = open(data_file, 'r', encoding='utf-8').readlines()
+    data = [eval(line) for line in lines]
+    sentences = [str(i["title"]).split('-')[-1] for i in data]
+
+
+    data = data
+    sentences = sentences
+
+    all_vec = get_bert_embedding(sentences)
+
+    print(f'import es data begin...')
+    time1 = time.time()
+    bulk_data = []
+
+
+    for idx, doc in enumerate(data):
+        doc["vector"] = all_vec[idx]
+        # print(doc["vector"])
+        index_meta = {
+            'index': {
+                '_index': KB["sysu"]["index"],
+                '_type': 'doc',
+                '_id': doc['id']
+            }
+        }
+        bulk_data.append(index_meta)
+        bulk_data.append(doc)
+
+
+    # res = es.bulk(index=KB["sysu"]["index"], body=bulk_data, refresh=True)
+
+    batch_size = 20
+    for i in range(0, len(bulk_data), batch_size):
+        batch_data = bulk_data[i:i + batch_size]
+        res = es.bulk(index=KB["sysu"]["index"], body=batch_data, refresh=True)
+        print(es.count(index=KB["sysu"]["index"]))
+
+
+    cost_time = time.time()-time1
+    print(f'import es data done...')
+    print(f'import es data cost time: {cost_time} sec.')
+
+
+def es_data():
+    create_es_index()
+    index_data()
 
 def load_data(index):
     sentences, contents, all_search_data = [], [],{}
@@ -194,16 +347,17 @@ def load_data(index):
                 data = json.loads(line)
                 dox_id = data['id']
                 # if dox_id in match_dox_ids:
-                # sentences.append(str(data["title"]).split('-')[-1])
-                sentences.append(data["title"])
+                sentences.append(str(data["title"]).split('-')[-1])
+                # sentences.append(data["title"])
                 contents.append(data)
                 all_search_data[str(dox_id)] = data
     return sentences, contents, all_search_data
 
 @app.on_event("startup")
 async def startup_event():
-    # local_index =load_local_index(index_file_path)
-    # print(f'load loacl index done')
+
+    # 使用es时可以直接将下面内容全部注释
+
     if not os.path.exists("index"):
         os.mkdir("index")
     vector_size = 768
@@ -245,21 +399,18 @@ async def startup_event():
 
         sentinel["index"][index_name] = index
         sentinel["data"][index_name] = contents
-        # sentinel["all_data"][index_name] = all_search_data
-    
+
+    print('app start')
 
         
 @app.post("/retrieve", summary="retrieve")
 async def retrieve(item: QueryModel) -> QueryBody:
-    # return contriever_retrieve(item)
     if item.method == "contriever":
         return contriever_retrieve(item)
     elif item.method == "es":
         return es_retrieve(item)
     else:
-        # return QueryBody(msg=f"Method {item.method} is not supported.")
-        return QueryBody(success = False)
-
+        return QueryBody(success=False)
 
 
 def contriever_retrieve(item: QueryModel) -> QueryBody:
@@ -273,8 +424,8 @@ def contriever_retrieve(item: QueryModel) -> QueryBody:
     # if '20' not in item.query:
     #     item.query = str(current_year)+'年'+item.query
     rewritten_query = item.query
-    if university_name in rewritten_query:
-        rewritten_query = rewritten_query.replace(university_name,'')
+    # if university_name in rewritten_query:
+    #     rewritten_query = rewritten_query.replace(university_name,'')
     time1 = time.time()
     matched_res = search(rewritten_query)
     match_time_used = time.time() - time1
@@ -306,13 +457,15 @@ def contriever_retrieve(item: QueryModel) -> QueryBody:
     print(f'weighted_res[:20]:{weighted_res[:20]}')
 
     lst = [i[1] for i in weighted_res]
+    if len(lst)>1:
+        print(f'lst:{lst}')
 
-    best_id = find_max_second_order_diff(lst)
-    print(f'best_id:{best_id}\n')
+        best_id = find_max_second_order_diff(lst)
+        print(f'best_id:{best_id}\n')
 
-    weighted_res = weighted_res[:best_id]
+        weighted_res = weighted_res[:best_id]
 
-    weighted_res = [i for i in weighted_res if i[1]>0.5]
+        weighted_res = [i for i in weighted_res if i[1]>0.5]
 
     print(f'weighted_res result:{ weighted_res}')
     # print(f'sentinel["data"][item.index]:{len(sentinel["data"][item.index])}')
@@ -342,39 +495,82 @@ def contriever_retrieve(item: QueryModel) -> QueryBody:
     return qBody
 
 
+
+
 def es_retrieve(item: QueryModel) -> QueryBody:
-    data = {
+    q_vector = get_bert_embedding([str(item.query)])[0]
+    print(q_vector)
+    print(len(q_vector))
+    # 测试标题，内容检索
+    data1 = {
         "query": {
-            "bool": {
-                "must": [
-                    {"match": { "title": item.query }},
-                    {"match": { "content": item.query }}
-                ]
+            "multi_match": {
+                "query": item.query,
+                "fields": ["title", "content"]
             }
         }
     }
-    json_data = json.dumps(data, ensure_ascii=False, indent=4)
-    proc = subprocess.check_output(['bash', "es/search.sh", KB[item.index]["index"], json_data])
-    result = json.loads(proc)
+
+
+    #测试向量检索
+    data ={
+        "query": {
+            "script_score": {
+            "query": {"match": {"title":item.query}},
+            "script": {"source": "cosineSimilarity(params.query_vector, 'vector') + 1.0",
+                            "params": {"query_vector": q_vector}}
+                }
+            }
+        }
+
+
+
+    print('------------------------------------',KB["sysu"]["index"])
+    #测试对标题和内容进行检索（没问题
+    result1 = es.search(index=KB["sysu"]["index"], body=data1)
+    print(result1)
+    print(f'data1 search end.--------------------------------')
+
+
+    # try:
+    #测试对向量检索（有问题，说解析data的参数错误，不知道错在哪了
+    result = es.search(index=KB["sysu"]["index"], body=data)
+    # except Exception as e:
+    #     print(e.info['error'])
     
-    if result["hits"]["total"] == 0:
-        return QueryBody(method="es", references=[])
-    else:
-        references = []
-        for d in result["hits"]["hits"][:item.top_n]:
+    print(result)
+    
+    references = []
+    res = result["hits"]["hits"]
+
+    if result["hits"]["total"]["value"] != 0: 
+
+        lst = [i["_score"] for i in res]
+        print(f'lst:{lst}')
+
+        if len(lst)>1:    
+            best_id = find_max_second_order_diff(lst)
+            print(f'best_id:{best_id}\n')
+            res = res[:best_id]
+
+        for d in res:
             references.append({
                 "score": d["_score"],
-                "source": d["_source"]
+                "source": d["_source"],
+                "vector": d["_source"]["vector"]
             })
             print(f"ES %.3f" % d["_score"])
             print(d["_source"]["title"], d["_score"])
             print(d["_source"]["content"])
-            print()
-        return QueryBody(method="es", references=references)
-
+            # print(d["_source"]["vector"])
+    return QueryBody(method="es", references=references)
 
 if __name__ == "__main__":
-
+    # es_data()  # 使用es检索时可以直接注释这句代码，因为数据已经导入到数据库了
     uvicorn.run(
-        app="retrieve_api:app", host="127.0.0.1", port=9628, reload=True
+        app="retrieve_api:app", host="127.0.0.1", port=9633, reload=True
     )
+
+
+
+# nohup python retrieve_api.py >> retrieve_api.log &
