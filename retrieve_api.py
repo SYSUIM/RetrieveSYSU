@@ -1,35 +1,29 @@
 import os
 import json
 import time
-import uvicorn
+import math
 import subprocess
-from fastapi import FastAPI
-from pydantic import BaseModel
-from typing import Dict, Optional, List, Any, Union
-import glob
 import logging
 import datetime
-import json
 import pickle
+from typing import Dict, Optional, List, Any, Union
+from collections import defaultdict, Counter
+
+
+import uvicorn
+from fastapi import FastAPI
+from pydantic import BaseModel
+import glob
 import numpy as np
-from collections import defaultdict
 import jieba
 import jieba.posseg as pseg
-from collections import Counter
+from elasticsearch import Elasticsearch, helpers
+
 # from retriever.faiss_retriever import QuestionReferenceModel
 # from retriever.indexer.faiss_indexers import DenseFlatIndexer
 from contriever.faiss_contriever import QuestionReferenceModel
 from contriever.indexer.faiss_indexers import DenseFlatIndexer
-from elasticsearch import Elasticsearch
-import torch
-from transformers import BertTokenizer, BertModel
-from torch.utils.data import Dataset, DataLoader
-import pickle
-import logging
-import os
-import math
-import numpy as np
-from elasticsearch import helpers
+from utils.embedding import get_bert_embedding
 # from elasticsearch_loader import Loader
 
 logging.basicConfig(
@@ -39,81 +33,7 @@ logging.basicConfig(
 )
 
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-
-
-class MyDataset(Dataset):
-    def __init__(self,ids,length):
-        self.ids = ids.to('cuda')
-        self.length = length
-       
-    def __len__(self):
-        return self.length
-    
-    def __getitem__(self, idx):
-        return {'input_ids': self.ids['input_ids'][idx],
-                'attention_mask': self.ids['attention_mask'][idx]}
-
-def generate_ids(data_list):
-    path = '/data/pzy2022/pretrained_model/bert-base-chinese'
-    tokenizer = BertTokenizer.from_pretrained(path)
-    ids = tokenizer(
-        [data for data in data_list],
-        return_tensors="pt",
-        truncation=True,
-        max_length=30, 
-        padding = 'max_length', 
-        add_special_tokens=False
-    )
-    length = len(data_list)
-    return ids, length
-
-
-def get_bert_embedding(sentences):
-
-    path = '/data/pzy2022/pretrained_model/bert-base-chinese'
-    model = BertModel.from_pretrained(
-        path,
-        torch_dtype = "auto"
-        ).to('cuda')
-
-
-    device_count = torch.cuda.device_count()
-    if device_count > 1:
-        model = torch.nn.DataParallel(model)
-
-    ids,length =  generate_ids(sentences)
-
-    batch_size = 1024
-    dataset = MyDataset(ids,length)
-    test_dataloader = DataLoader(
-        dataset = dataset,
-        batch_size = batch_size,
-        shuffle = False
-        )
-
-    logging.info(f'get embedding begin...')
-    all_vec = []
-    with torch.no_grad():
-        for batch_id, data in enumerate(test_dataloader):
-            input_keys = ('input_ids', 'attention_mask')
-            input = {key: value for key, value in data.items() if key in input_keys}
-            outputs = model(**input)
-            last_layer_embeddings = outputs.last_hidden_state  # 获取最后一层的输出
-            mask = input['attention_mask'].unsqueeze(-1).float()
-            # 对每个样本的每个token的embedding乘上attention mask，即只保留非填充部分的信息
-            last_layer_embeddings_masked = last_layer_embeddings * mask
-            # 对每个样本的每个token的embedding在token序列长度维度上求平均
-            mean_embeddings = torch.mean(last_layer_embeddings_masked, dim=1)
-            # mean_embeddings = torch.mean(last_layer_embeddings_masked[:,10:,:], dim=1)
-            vec = mean_embeddings.cpu().numpy().tolist()
-            # vec = vec[:10]
-            all_vec = all_vec + vec
-            logging.info(f'batch_id:{batch_id}/{int(len(sentences)/batch_size)}')
-    logging.info(f'get embedding done...')
-
-    return all_vec
-
+# os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 
 local_index = {}
@@ -121,6 +41,7 @@ jsonl_file_path = "./data/sys_test/sysu_data_withid.jsonl"
 index_file_path = 'data/sys_test/id_index_content.pickle'
 university_name = '中山大学'
 match_doc_ids = []
+
 es = Elasticsearch(['localhost:9200'], timeout=120)
 
 
@@ -128,6 +49,7 @@ def jieba_cut(sentence):
     words = set(jieba.cut(sentence))
     words = [word for word in words if len(word) > 1]
     return words
+
 
 def load_local_index(path):
     with open(path, "rb") as f:
@@ -152,6 +74,7 @@ def build_index(jsonl_file_path, index_file_path) -> dict:
         pickle.dump(index, f)
 
     return index
+
 
 build_index(jsonl_file_path, index_file_path)
 print(f'build_index done')
@@ -218,6 +141,7 @@ def search(query) -> list:
 
     return match_res
 
+
 def weighted_average(lst1, lst2):
 
     # max_val = max(t[1] for t in lst1)
@@ -226,6 +150,7 @@ def weighted_average(lst1, lst2):
     res = [(t1[0], (t1[1] + dict2.get(t1[0], 0)) / 2) for t1 in lst1 if t1[0] in dict2]
 
     return sorted(res, key=lambda t: t[1], reverse=True)
+
 
 def find_max_second_order_diff(lst):
 
@@ -271,71 +196,6 @@ KB = {
         "index": "sysu_test5",
     }
 }
-
-# 定义索引个数，主要是为了指定"vector"为dense_vector
-def create_es_index():
-    mapping = {
-        "properties": {
-            "title": {"type": "text"},
-            "url":{"type":"text"},
-            "id":{"type":"long"},
-            "content": {"type": "text"},
-            "vector": {"type": "dense_vector", "dims": 768}
-        }
-    }
-    es.indices.create(index=KB["sysu"]["index"], body={"mappings": mapping})
-
-
-
-# 将json数据导入数据库
-def index_data():
-    data_file = KB["sysu"]["data"][0]
-    lines = open(data_file, 'r', encoding='utf-8').readlines()
-    data = [eval(line) for line in lines]
-    sentences = [str(i["title"]).split('-')[-1] for i in data]
-
-
-    data = data
-    sentences = sentences
-
-    all_vec = get_bert_embedding(sentences)
-
-    print(f'import es data begin...')
-    time1 = time.time()
-    bulk_data = []
-
-
-    for idx, doc in enumerate(data):
-        doc["vector"] = all_vec[idx]
-        # print(doc["vector"])
-        index_meta = {
-            'index': {
-                '_index': KB["sysu"]["index"],
-                '_type': 'doc',
-                '_id': doc['id']
-            }
-        }
-        bulk_data.append(index_meta)
-        bulk_data.append(doc)
-
-
-    # res = es.bulk(index=KB["sysu"]["index"], body=bulk_data, refresh=True)
-
-    batch_size = 20
-    for i in range(0, len(bulk_data), batch_size):
-        batch_data = bulk_data[i:i + batch_size]
-        res = es.bulk(index=KB["sysu"]["index"], body=batch_data, refresh=True)
-        print(es.count(index=KB["sysu"]["index"]))
-
-
-    cost_time = time.time()-time1
-    print(f'import es data done...')
-    print(f'import es data cost time: {cost_time} sec.')
-
-
-def es_data():
-    create_es_index()
-    index_data()
 
 def load_data(index):
     sentences, contents, all_search_data = [], [],{}
@@ -495,8 +355,6 @@ def contriever_retrieve(item: QueryModel) -> QueryBody:
     return qBody
 
 
-
-
 def es_retrieve(item: QueryModel) -> QueryBody:
     q_vector = get_bert_embedding([str(item.query)])[0]
     print(q_vector)
@@ -570,7 +428,3 @@ if __name__ == "__main__":
     uvicorn.run(
         app="retrieve_api:app", host="127.0.0.1", port=9633, reload=True
     )
-
-
-
-# nohup python retrieve_api.py >> retrieve_api.log &
