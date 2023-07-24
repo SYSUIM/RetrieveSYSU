@@ -1,5 +1,24 @@
+import sys
+sys.path.append('/data2/panziyang/RetrieveSYSU')
 import logging
-from elasticsearch import Elasticsearch
+from typing import Literal
+
+from tqdm import tqdm
+import spacy
+from elasticsearch import Elasticsearch, helpers
+
+from embedding import get_bert_embedding, get_reference_embedding, get_query_embedding
+from contriever.faiss_contriever import QuestionReferenceModel
+
+
+def spliter(article, method: Literal['spacy', 'langchain']):
+    if method == 'spacy':
+        nlp = spacy.load('/data2/panziyang/zh_core_web_sm/zh_core_web_sm-3.6.0')
+        doc = nlp(article)
+        sentences = [sent.text for sent in doc.sents if sent.text != '..']
+
+    return sentences
+    
 
 # 定义索引个数，主要是为了指定"vector"为dense_vector
 def create_es_index(es: Elasticsearch, index: str):
@@ -14,61 +33,101 @@ def create_es_index(es: Elasticsearch, index: str):
             "id": {
                 "type":"long"
                 },
+            "article_id": {
+                "type": "long"
+            },
             "content": {
                 "type": "text"
                 },
-            "vector": {
+            "title_embedding": {
                 "type": "dense_vector",
                 "dims": 768
+                },
+            "sentence_embedding": {
+                "type": "dense_vector",
+                "dims": 768
+                },
+            "sentence": {
+                "type": "text"
+                },
+            "serial": {
+                "type": "long"
+                },
+            "content_length": {
+                "type": "long"
+                },
+            "sentence_length": {
+                "type": "long"
                 }
         }
     }
-    # es.indices.create(index=KB["sysu"]["index"], body={"mappings": mapping})
+
     es.indices.create(index = index, body={"mappings": mapping})
 
 
 # 将json数据导入数据库
 def index_data(es: Elasticsearch, data_file_path: str, index: str):
-    # data_file = KB["sysu"]["data"][0]
-    lines = open(data_file_path, 'r', encoding='utf-8').readlines()
+    lines = open(data_file_path, 'r').readlines()
     data = [eval(line) for line in lines]
-    sentences = [str(i["title"]).split('-')[-1] for i in data]
+    titles = [str(i["title"]).split('-')[-1] for i in data]
+    articles = [str(i["content"]) for i in data]
 
-    data = data
-    sentences = sentences
-
-    all_vec = get_bert_embedding(sentences)
-
-    logging.info(f'begin to import data to es...')
-    # time1 = time.time()
+    model = QuestionReferenceModel('contriever/ckpt/question_encoder', 'contriever/ckpt/question_encoder', device = 'cuda:1')
+    
+    logging.info(f'begin to generate data to es...')
     bulk_data = []
+    id = 0
+    for article in tqdm(data[:]):
+        serial = 0
+        article["content_length"] = len(str(article["content"]))
+        article["article_id"] = article["id"]
 
-    for idx, doc in enumerate(data):
-        doc["vector"] = all_vec[idx]
-        # print(doc["vector"])
-        index_meta = {
-            'index': {
-                '_index': KB["sysu"]["index"],
-                '_type': 'doc',
-                '_id': doc['id']
-            }
-        }
-        bulk_data.append(index_meta)
-        bulk_data.append(doc)
+        title = str(article["title"]).split('-')[-1]
+        title_embedding = get_query_embedding(model, title)
+        sentences = spliter(str(article["content"]), method = 'spacy')
+        sentence_embedding = get_reference_embedding(model, sentences)
+        
+        
+        for idx, embedding in enumerate(sentence_embedding):
+            article["sentence_embedding"] = embedding
+            article["title_embedding"] = title_embedding[0]
+            article["sentence"] = sentences[idx]
+            article["serial"] = serial
+            article["sentence_length"] = len(article["sentence"])
+            
+            bulk_data.append(
+                {
+                    '_index': index,
+                    '_id': id,
+                    '_source': article
+                }
+            )
 
-    # res = es.bulk(index=KB["sysu"]["index"], body=bulk_data, refresh=True)
+            serial += 1
+            id += 1
 
-    batch_size = 20
-    for i in range(0, len(bulk_data), batch_size):
-        batch_data = bulk_data[i : i + batch_size]
-        res = es.bulk(index = index, body = batch_data, refresh=True)
-        print(es.count(index = index))
-
-
-    # cost_time = time.time()-time1
+    logging.info(f'generation done...')
+    logging.info(f'begin to import data to es...')
+    helpers.bulk(es, bulk_data)
     logging.info(f'import data to es done...')
 
 
-def es_data(es: Elasticsearch, ):
+# def es_data(es: Elasticsearch, ):
+#     create_es_index(es = es, index = index)
+#     index_data(es = es, data_file_path = data_file_path, index = index)
+
+
+if __name__ == '__main__':
+    import sys
+    sys.path.append('/data2/panziyang/RetrieveSYSU')
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)-8s %(module)s[line:%(lineno)d]: >> %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    es = Elasticsearch(['localhost:9200'], timeout=120)
+    index = 'scu_test'
     create_es_index(es = es, index = index)
-    index_data(es = es, data_file_path = data_file_path, index = index)
+    index_data(es, '/data2/panziyang/RetrieveSYSU/data/scu/scu_data_withid.jsonl', index = index)
