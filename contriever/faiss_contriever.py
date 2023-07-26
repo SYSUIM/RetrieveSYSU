@@ -25,17 +25,35 @@ class QuestionReferenceModel:
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu") if not device else device
         self.model = self.model.to(self.device).eval()
 
-    def get_question_embedding(self, question) -> torch.Tensor:
+    def get_question_embedding(self, question, batch_forward: bool = False, bsz = 32) -> torch.Tensor:
         torch.cuda.empty_cache()
         with torch.no_grad():
-            question_inputs = self.tokenizer([question], padding=True,
-                                    truncation=True, return_tensors='pt')
-            for key in question_inputs:
-                question_inputs[key] = question_inputs[key].to(self.device)
-            print(f'tensor size of question:{question_inputs["input_ids"].shape}')
+            if not batch_forward:
+                question_inputs = self.tokenizer([question], padding=True,
+                                        truncation=True, return_tensors='pt')
+                for key in question_inputs:
+                    question_inputs[key] = question_inputs[key].to(self.device)
+                    print(f'tensor size of question:{question_inputs["input_ids"].shape}')
             
-            question_embedding = self.model.question_encoder(**question_inputs) / 0.05
-        return question_embedding.cpu().numpy()
+                question_embedding = self.model.question_encoder(**question_inputs) / 0.05
+                
+                return question_embedding.cpu().numpy()
+            else:
+                question_embeddings = []
+                n = len(question)
+                for batch_start in tqdm(range(0, n, bsz), total=int(n/bsz)):
+                    batch = question[batch_start : batch_start + bsz]
+                    select_inputs = self.tokenizer(batch, padding=True,
+                                                    truncation=True, return_tensors='pt')
+                    for key in select_inputs:
+                        select_inputs[key] = select_inputs[key].to(self.device)
+                        # print(select_inputs)
+                    question_embedding = self.model.reference_encoder(**select_inputs)
+                    question_embeddings.append(question_embedding.cpu().numpy())
+                question_embedding = np.vstack(question_embeddings)
+
+                return question_embedding
+        
     
     def get_document_embedding(self, sentences, bsz=32) -> torch.Tensor:
         torch.cuda.empty_cache()

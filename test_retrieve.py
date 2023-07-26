@@ -16,7 +16,8 @@ payload_faiss = {
     # 多种输入方式
     # "query": input("请输入查询内容: "),
     # "query": sys.argv[1],
-    "query": "简单介绍一下中山大学信息管理学院"
+    # "query": "简单介绍一下中山大学信息管理学院"
+    "query": "简单介绍一下四川大学"
     # "query": "生物类在广东招生科目要求\n在广东地区，2023 年普通录取类中，生物类专业的招生科目要求是什么？"
     # "query":"今年北京招生的专业"
     # "top_n": 5,
@@ -32,13 +33,13 @@ response = response.json()
 
 
 # es 
-# t = response['references']
-# print(f'reference number: {len(t)}')
-# for i in t:
-#     print(i["score"])
-#     print(i["source"])
-#     print('\n')
-
+t = response['references']
+print(f'reference number: {len(t)}')
+for i in t:
+    # print(i["score"])
+    print(i["source"])
+    print('\n')
+exit(0)
 
 # contriever
 t = response['results']

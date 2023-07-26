@@ -1,5 +1,6 @@
 import logging
-
+import sys
+sys.path.append('/data2/panziyang/RetrieveSYSU')
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModel
@@ -76,3 +77,13 @@ def get_bert_embedding(sentences):
 
     return all_vec
 
+def get_reference_embedding(model, sentences):
+    document_embeddings = model.get_document_embedding(sentences, bsz = 512)
+
+    return document_embeddings
+
+
+def get_query_embedding(model, sentences):
+    query_embeddings = model.get_question_embedding(sentences, batch_forward = True, bsz = 512)
+
+    return query_embeddings

@@ -23,7 +23,7 @@ from elasticsearch import Elasticsearch, helpers
 # from retriever.indexer.faiss_indexers import DenseFlatIndexer
 from contriever.faiss_contriever import QuestionReferenceModel
 from contriever.indexer.faiss_indexers import DenseFlatIndexer
-from utils.embedding import get_bert_embedding
+from utils.embedding import get_bert_embedding, get_query_embedding
 # from elasticsearch_loader import Loader
 
 logging.basicConfig(
@@ -32,7 +32,7 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-
+model = QuestionReferenceModel('contriever/ckpt/question_encoder', 'contriever/ckpt/question_encoder', device = 'cuda:1')
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 
@@ -76,9 +76,9 @@ def build_index(jsonl_file_path, index_file_path) -> dict:
     return index
 
 
-build_index(jsonl_file_path, index_file_path)
-print(f'build_index done')
-local_index =load_local_index(index_file_path)
+# build_index(jsonl_file_path, index_file_path)
+# print(f'build_index done')
+# local_index =load_local_index(index_file_path)
 
 # 定义查询函数
 def search(query) -> list:
@@ -167,8 +167,8 @@ sentinel = {}
 class QueryModel(BaseModel):
     query: str = ""
     top_n: int = 500
-    # method: str = "es"
-    method: str = "contriever"
+    method: str = "es"
+    # method: str = "contriever"
     index: str = "sysu"
 
 
@@ -181,10 +181,10 @@ class ResultModel(BaseModel):
 class QueryBody(BaseModel):
     method: str = ""
     references: List[Dict[str, Union[float, Dict[str, Any]]]] = []
-    results: Dict = {
-        # 改成名称
-        "contriever": [],
-    }
+    # results: Dict = {
+    #     # 改成名称
+    #     "contriever": [],
+    # }
     success: bool = True
 
 
@@ -193,7 +193,8 @@ KB = {
         "data": [
             "data/sys_test/sysu_data_withid.jsonl"
         ],
-        "index": "sysu_test5",
+        # "index": "sysu_test6",
+        "index": "test",
     }
 }
 
@@ -218,47 +219,47 @@ async def startup_event():
 
     # 使用es时可以直接将下面内容全部注释
 
-    if not os.path.exists("index"):
-        os.mkdir("index")
-    vector_size = 768
-    buffer_size = 50000
-    model = QuestionReferenceModel('contriever/ckpt/question_encoder', 'contriever/ckpt/question_encoder')
+    # if not os.path.exists("index"):
+    #     os.mkdir("index")
+    # vector_size = 768
+    # buffer_size = 50000
+    # model = QuestionReferenceModel('contriever/ckpt/question_encoder', 'contriever/ckpt/question_encoder')
 
-    sentinel["model"] = model
-    sentinel["index"] = {}
-    sentinel["data"] = {}
-    sentinel["id"] = {}
+    # sentinel["model"] = model
+    # sentinel["index"] = {}
+    # sentinel["data"] = {}
+    # sentinel["id"] = {}
 
-    for index_name in KB.keys():
-        print("Preparing index", index_name)
-        index = DenseFlatIndexer()
-        print("Local Index class %s " % type(index))
-        index.init_index(vector_size)
+    # for index_name in KB.keys():
+    #     print("Preparing index", index_name)
+    #     index = DenseFlatIndexer()
+    #     print("Local Index class %s " % type(index))
+    #     index.init_index(vector_size)
 
-        sentences, contents, all_search_data = load_data(index_name)
+    #     sentences, contents, all_search_data = load_data(index_name)
 
-        index_path = f"index/{index_name}"
-        if index.index_exists(index_path):
-            index.deserialize(index_path)
-        else:
-            document_embeddings = model.get_document_embedding(sentences)
+    #     index_path = f"index/{index_name}"
+    #     if index.index_exists(index_path):
+    #         index.deserialize(index_path)
+    #     else:
+    #         document_embeddings = model.get_document_embedding(sentences)
 
-            buffer = []
-            for i, embedding in enumerate(document_embeddings):
-                item = (i, embedding)
-                buffer.append(item)
-                if 0 < buffer_size == len(buffer):
-                    index.index_data(buffer)
-                    buffer = []
-            index.index_data(buffer)
-            print("Data indexing completed.")
+    #         buffer = []
+    #         for i, embedding in enumerate(document_embeddings):
+    #             item = (i, embedding)
+    #             buffer.append(item)
+    #             if 0 < buffer_size == len(buffer):
+    #                 index.index_data(buffer)
+    #                 buffer = []
+    #         index.index_data(buffer)
+    #         print("Data indexing completed.")
             
-            if not os.path.exists(index_path):
-                os.mkdir(index_path)
-            index.serialize(index_path)
+    #         if not os.path.exists(index_path):
+    #             os.mkdir(index_path)
+    #         index.serialize(index_path)
 
-        sentinel["index"][index_name] = index
-        sentinel["data"][index_name] = contents
+    #     sentinel["index"][index_name] = index
+    #     sentinel["data"][index_name] = contents
 
     print('app start')
 
@@ -356,11 +357,13 @@ def contriever_retrieve(item: QueryModel) -> QueryBody:
 
 
 def es_retrieve(item: QueryModel) -> QueryBody:
-    q_vector = get_bert_embedding([str(item.query)])[0]
-    print(q_vector)
-    print(len(q_vector))
+    global model
+    # q_vector = get_bert_embedding([str(item.query)])[0]
+    q_vector = get_query_embedding(model, [str(item.query)])[0]
+    # print(q_vector)
+    # print(len(q_vector))
     # 测试标题，内容检索
-    data1 = {
+    term_body = {
         "query": {
             "multi_match": {
                 "query": item.query,
@@ -369,62 +372,68 @@ def es_retrieve(item: QueryModel) -> QueryBody:
         }
     }
 
-
     #测试向量检索
-    data ={
+    embedding_body = {
         "query": {
             "script_score": {
-            "query": {"match": {"title":item.query}},
-            "script": {"source": "cosineSimilarity(params.query_vector, 'vector') + 1.0",
-                            "params": {"query_vector": q_vector}}
+                "query": {"match": {"title":item.query}},
+                "script": {
+                    "source": "cosineSimilarity(params.query_vector, 'title_embedding') + 1.0",
+                    "params": {"query_vector": q_vector}
+                    }
                 }
             }
         }
 
-
-
     print('------------------------------------',KB["sysu"]["index"])
     #测试对标题和内容进行检索（没问题
-    result1 = es.search(index=KB["sysu"]["index"], body=data1)
-    print(result1)
-    print(f'data1 search end.--------------------------------')
+    # result1 = es.search(index=KB["sysu"]["index"], body=term_body)
+    result1 = es.search(index='scu_test', body=term_body)
+    for r in result1['hits']["hits"]:
+        print(r['_source']['title'])
+        print(r['_source']['content'])
+        print(r['_source']['article_id'])
+        print(r['_source']['serial'])
 
+    print(f'data1 search end.--------------------------------')
 
     # try:
     #测试对向量检索（有问题，说解析data的参数错误，不知道错在哪了
-    result = es.search(index=KB["sysu"]["index"], body=data)
+    # result = es.search(index=KB["sysu"]["index"], body=data)
     # except Exception as e:
     #     print(e.info['error'])
     
-    print(result)
+    # print(result)
     
     references = []
-    res = result["hits"]["hits"]
+    res = result1["hits"]["hits"]
 
-    if result["hits"]["total"]["value"] != 0: 
+    if result1["hits"]["total"]["value"] != 0: 
 
         lst = [i["_score"] for i in res]
         print(f'lst:{lst}')
 
-        if len(lst)>1:    
-            best_id = find_max_second_order_diff(lst)
-            print(f'best_id:{best_id}\n')
-            res = res[:best_id]
+        # if len(lst)>1:    
+        #     best_id = find_max_second_order_diff(lst)
+        #     print(f'best_id:{best_id}\n')
+        #     res = res[:best_id]
 
         for d in res:
             references.append({
                 "score": d["_score"],
                 "source": d["_source"],
-                "vector": d["_source"]["vector"]
+                # "vector": d["_source"]["vector"]
             })
             print(f"ES %.3f" % d["_score"])
             print(d["_source"]["title"], d["_score"])
             print(d["_source"]["content"])
+            print(d["_source"]["sentence"])
             # print(d["_source"]["vector"])
     return QueryBody(method="es", references=references)
 
 if __name__ == "__main__":
     # es_data()  # 使用es检索时可以直接注释这句代码，因为数据已经导入到数据库了
+    model = QuestionReferenceModel('contriever/ckpt/question_encoder', 'contriever/ckpt/question_encoder', device = 'cuda:1')
     uvicorn.run(
         app="retrieve_api:app", host="127.0.0.1", port=9633, reload=True
     )
