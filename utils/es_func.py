@@ -72,15 +72,13 @@ def index_data(es: Elasticsearch, data_file_path: str, index: str):
     titles = [str(i["title"]).split('-')[-1] for i in data]
     articles = [str(i["content"]) for i in data]
 
-    model = QuestionReferenceModel('contriever/ckpt/question_encoder', 'contriever/ckpt/question_encoder', device = 'cuda:1')
+    model = QuestionReferenceModel('/data2/panziyang/RetrieveSYSU/contriever/ckpt/question_encoder', '/data2/panziyang/RetrieveSYSU/contriever/ckpt/question_encoder', device = 'cuda:4')
     
     logging.info(f'begin to generate data to es...')
     bulk_data = []
     id = 0
     for article in tqdm(data[:]):
         serial = 0
-        article["content_length"] = len(str(article["content"]))
-        article["article_id"] = article["id"]
 
         title = str(article["title"]).split('-')[-1]
         title_embedding = get_query_embedding(model, title)
@@ -89,17 +87,25 @@ def index_data(es: Elasticsearch, data_file_path: str, index: str):
         
         
         for idx, embedding in enumerate(sentence_embedding):
-            article["sentence_embedding"] = embedding
-            article["title_embedding"] = title_embedding[0]
-            article["sentence"] = sentences[idx]
-            article["serial"] = serial
-            article["sentence_length"] = len(article["sentence"])
+            source = {}
+            
+            source["title"] = article["title"]
+            source["url"] = article["url"]
+            source["id"] = article["id"]
+            source["article_id"] = article["id"]
+            source["content"] = article["content"]
+            source["title_embedding"] = title_embedding[0]
+            source["sentence_embedding"] = embedding
+            source["sentence"] = sentences[idx]
+            source["serial"] = serial
+            source["content_length"] = len(str(article["content"]))
+            source["sentence_length"] = len(source["sentence"])
             
             bulk_data.append(
                 {
                     '_index': index,
                     '_id': id,
-                    '_source': article
+                    '_source': source
                 }
             )
 
@@ -128,6 +134,6 @@ if __name__ == '__main__':
     )
     
     es = Elasticsearch(['localhost:9200'], timeout=120)
-    index = 'scu_test'
+    index = 'scu1'
     create_es_index(es = es, index = index)
     index_data(es, '/data2/panziyang/RetrieveSYSU/data/scu/scu_data_withid.jsonl', index = index)
